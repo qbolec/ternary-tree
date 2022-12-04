@@ -120,6 +120,7 @@ use std::cmp::Ordering::Greater;
 use std::cmp::Ordering::Less;
 use std::fmt;
 use std::io::Write;
+use std::iter::Peekable;
 use std::mem;
 use std::mem::replace;
 use std::ptr;
@@ -133,11 +134,57 @@ use std::str::Chars;
 pub struct Tst<T> {
     root: Link<T>,
 }
+type CharsChain = Option<Box<CharNode>>;
+struct CharNode {
+    first: char,
+    rest: CharsChain,
+}
 
+/*
+trait AbstractCharsNodeRef<'a> {
+    type CharsChainRef : AbstractCharsChainRef<'a, CharsNodeRef=Self>;
+    fn unwrap(self) -> (char, Self::CharsChainRef);
+}
+trait AbstractCharsChainRef<'a> {
+    type CharNodeRef : AbstractCharsNodeRef<'a, CharsChainRef=Self>;
+    fn unwrap(self) -> Option<Self::CharNodeRef>;
+}
+
+impl<'a> AbstractCharsNodeRef<'a> for &'a CharsNode {
+    type CharsChainRef = &'a CharsChain;
+    fn unwrap(self) -> (char, Self::CharsChainRef) {
+        (self.first, &self.rest)
+    }
+}
+impl<'a> AbstractCharsNodeRef<'a> for &'a mut CharsNode {
+    type CharsChainRef = &'a mut CharsChain;
+    fn unwrap(self) -> (char, Self::CharsChainRef) {
+        (self.first, &mut self.rest)
+    }
+}
+
+impl<'a> AbstractCharsChainRef<'a> for &'a CharsChain {
+    type CharsNodeRef = &'a CharsChain;
+    fn unwrap(self) -> Option<Self::CharNodeRef> {
+        match self {
+            None => None,
+            Some(boxed_node) => Some(& * boxed_node)
+        }
+    }
+}
+impl<'a> AbstractCharsChainRef<'a> for &'a mut CharsChain {
+    type CharsNodeRef = &'a mut CharsChain;
+    fn unwrap(self) -> Option<Self::CharNodeRef> {
+        match self {
+            None => None,
+            Some(boxed_node) => Some(&mut * boxed_node)
+        }
+    }
+}
+*/
 type Link<T> = Option<Box<Node<T>>>;
-
 struct Node<T> {
-    label: char,
+    label: CharNode,
     value: Option<T>,
     left: Link<T>,
     middle: Link<T>,
@@ -145,10 +192,97 @@ struct Node<T> {
     count: usize,
 }
 
+trait AbstractLinkRef<'a> {
+    type TRef;
+    type NodeRef: AbstractNodeRef<'a, TRef = Self::TRef, LinkRef = Self>;
+    fn unwrap(self) -> Option<Self::NodeRef>;
+}
+
+trait AbstractNodeRef<'a> {
+    type TRef;
+    type LinkRef: AbstractLinkRef<'a, TRef = Self::TRef, NodeRef = Self>;
+    fn unwrap(
+        self,
+    ) -> (
+        &'a CharNode,
+        Option<Self::TRef>,
+        Self::LinkRef,
+        Self::LinkRef,
+        Self::LinkRef,
+        &'a usize,
+    );
+}
+impl<'a, T> AbstractNodeRef<'a> for &'a Node<T> {
+    type TRef = &'a T;
+    type LinkRef = &'a Link<T>;
+    fn unwrap(
+        self,
+    ) -> (
+        &'a CharNode,
+        Option<Self::TRef>,
+        Self::LinkRef,
+        Self::LinkRef,
+        Self::LinkRef,
+        &'a usize,
+    ) {
+        (
+            &self.label,
+            self.value.as_ref(),
+            &self.left,
+            &self.middle,
+            &self.right,
+            &self.count,
+        )
+    }
+}
+impl<'a, T> AbstractNodeRef<'a> for &'a mut Node<T> {
+    type TRef = &'a mut T;
+    type LinkRef = &'a mut Link<T>;
+    fn unwrap(
+        self,
+    ) -> (
+        &'a CharNode,
+        Option<Self::TRef>,
+        Self::LinkRef,
+        Self::LinkRef,
+        Self::LinkRef,
+        &'a usize,
+    ) {
+        (
+            &self.label,
+            self.value.as_mut(),
+            &mut self.left,
+            &mut self.middle,
+            &mut self.right,
+            &self.count,
+        )
+    }
+}
+
+impl<'a, T> AbstractLinkRef<'a> for &'a Link<T> {
+    type TRef = &'a T;
+    type NodeRef = &'a Node<T>;
+    fn unwrap(self) -> Option<Self::NodeRef> {
+        match self {
+            None => None,
+            Some(boxed_node) => Some(&*boxed_node),
+        }
+    }
+}
+impl<'a, T> AbstractLinkRef<'a> for &'a mut Link<T> {
+    type TRef = &'a mut T;
+    type NodeRef = &'a mut Node<T>;
+    fn unwrap(self) -> Option<Self::NodeRef> {
+        match self {
+            None => None,
+            Some(boxed_node) => Some(&mut *boxed_node),
+        }
+    }
+}
+
 fn link_count<T>(link: &Link<T>) -> usize {
     link.as_ref().map_or(0, |v| v.count)
 }
-
 impl<T> Node<T> {
     fn verify_count(&self) {
         assert_eq!(
@@ -168,12 +302,25 @@ impl<T> Node<T> {
 impl<T> Default for Node<T> {
     fn default() -> Node<T> {
         Node {
-            label: '\0',
+            label: CharNode {
+                first: '\0',
+                rest: None,
+            },
             value: None,
             left: None,
             middle: None,
             right: None,
             count: 0,
+        }
+    }
+}
+
+impl fmt::Debug for CharNode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let res = write!(f, "{}", self.first)?;
+        match self.rest {
+            None => Ok(res),
+            Some(ref node) => node.fmt(f),
         }
     }
 }
@@ -185,7 +332,7 @@ impl<T> fmt::Debug for Node<T> {
             Some(_) => "☑",
         };
 
-        write!(f, "{}-{}", value_box, self.label)
+        write!(f, "{}-{:?}", value_box, self.label)
     }
 }
 
@@ -260,6 +407,36 @@ fn needs_rebuild(total: usize, child: usize) -> bool {
     // needs_rebuild(0,0) must be true
     return total * 3 <= child * 4;
 }
+
+impl CharNode {
+    fn from_chars(first: char, mut rest: Chars) -> CharNode {
+        CharNode {
+            first,
+            rest: match rest.next() {
+                None => None,
+                Some(label) => Some(Box::new(CharNode::from_chars(label, rest))),
+            },
+        }
+    }
+}
+fn split_chain_at_mismatch(
+    rest: &mut CharsChain,
+    key_tail: &mut Chars,
+) -> (CharsChain, Option<char>) {
+    match rest {
+        None => (None, key_tail.next()),
+        Some(char_node) => match key_tail.next() {
+            None => (replace(rest, None), None),
+            Some(label) => {
+                if label == char_node.first {
+                    split_chain_at_mismatch(&mut char_node.rest, key_tail)
+                } else {
+                    (replace(rest, None), Some(label))
+                }
+            }
+        },
+    }
+}
 fn insert_r<T>(
     link: &mut Link<T>,
     label: char,
@@ -269,20 +446,50 @@ fn insert_r<T>(
 ) -> Option<T> {
     if link.is_none() {
         *link = Some(Box::new(Node::<T> {
-            label,
+            label: CharNode::from_chars(label, key_tail),
+            count: 1,
             ..Default::default()
         }));
+        return None;
     }
     let ref mut node = link.as_mut().unwrap();
     let rebuild_on_new;
-    let old_value = if label == node.label {
+    let old_value = if label == node.label.first {
         rebuild_on_new = false;
-        match key_tail.next() {
-            None => replace(&mut node.value, Some(value)),
-            Some(label) => insert_r(&mut node.middle, label, key_tail, value, true),
+        // rest, key_tail
+        // ""  , ""       ->  replace(&mut node.value, Some(value))
+        // ""  , "ab"     ->  insert_r(&mut node.middle, 'a', "b", value, true)
+        // "ab", ""       ->  spawn new Node with left=right=None, middle=node.middle, label={'a',"b"}, count=node.count, value=node.value
+        //                    modify self.label.next = None, middle=spawned,
+        //                    replace(&mut node.value, Some(value))
+        // "azbc", "azde" ->  spawn new Node with left=right=None, middle=node.middle, label={'a',"b"}, count=node.count, value=node.value
+        //                    modify self.label.next = None, middle=spawned,
+        //
+        let (different_suffix, different_label) =
+            split_chain_at_mismatch(&mut node.label.rest, &mut key_tail);
+        match different_suffix {
+            None => match different_label {
+                None => replace(&mut node.value, Some(value)),
+                Some(label) => insert_r(&mut node.middle, label, key_tail, value, true),
+            },
+            Some(suffix) => {
+                let spawned = Some(Box::new(Node::<T> {
+                    label: *suffix,
+                    count: node.count - link_count(&node.left) - link_count(&node.right),
+                    value: replace(&mut node.value, None),
+                    middle: replace(&mut node.middle, None),
+                    left: None,
+                    right: None,
+                }));
+                node.middle = spawned;
+                match different_label {
+                    None => replace(&mut node.value, Some(value)),
+                    Some(label) => insert_r(&mut node.middle, label, key_tail, value, true),
+                }
+            }
         }
     } else {
-        let child = if label < node.label {
+        let child = if label < node.label.first {
             &mut node.left
         } else {
             &mut node.right
@@ -306,32 +513,54 @@ fn insert_r<T>(
     old_value
 }
 
-fn get_r<'a, T>(link: &'a Link<T>, label: char, key_tail: &mut Chars) -> Option<&'a T> {
-    match *link {
-        None => None,
-
-        Some(ref node) => match label.cmp(&node.label) {
-            Less => get_r(&node.left, label, key_tail),
-
-            Equal => {
-                let new_label = key_tail.next();
-
-                match new_label {
-                    None => match node.value {
-                        None => None,
-
-                        Some(ref value) => Some(value),
-                    },
-
-                    Some(label) => get_r(&node.middle, label, key_tail),
-                }
+fn traverse_chain<'a>(rest: &'a CharsChain, key: &mut Peekable<Chars>) -> &'a CharsChain {
+    match rest {
+        None => rest,
+        Some(char_node) => match key.peek() {
+            Some(label) if label == &char_node.first => {
+                key.next();
+                traverse_chain(&char_node.rest, key)
             }
-
-            Greater => get_r(&node.right, label, key_tail),
+            _ => rest,
         },
     }
 }
 
+fn get_gen<'a, LinkRef>(link: LinkRef, key: &mut Peekable<Chars>) -> Option<LinkRef::TRef>
+where
+    LinkRef: AbstractLinkRef<'a>,
+{
+    match link.unwrap() {
+        None => None,
+        Some(node) => {
+            let (label, value, left, middle, right, _size) = node.unwrap();
+            match key.peek() {
+                None => None,
+                Some(key_letter) => match key_letter.cmp(&label.first) {
+                    Less => get_gen(left, key),
+                    Equal => {
+                        key.next();
+                        let ref rest = traverse_chain(&label.rest, key);
+                        match rest {
+                            None => match key.peek() {
+                                None => value,
+                                _ => get_gen(middle, key),
+                            },
+                            _ => None,
+                        }
+                    }
+                    Greater => get_gen(right, key),
+                },
+            }
+        }
+    }
+}
+fn push_chain_to_string(label: &CharNode, path: &mut String) {
+    path.push(label.first);
+    if let Some(char_node) = label.rest.as_ref() {
+        push_chain_to_string(&*char_node, path);
+    }
+}
 fn get_nth_r<'a, T>(link: &'a Link<T>, mut n: usize, mut path: String) -> Option<(String, &'a T)> {
     match *link {
         None => None,
@@ -343,7 +572,7 @@ fn get_nth_r<'a, T>(link: &'a Link<T>, mut n: usize, mut path: String) -> Option
             n -= left_count;
             if node.value.is_some() {
                 if n == 0 {
-                    path.push(node.label);
+                    push_chain_to_string(&node.label, &mut path);
                     return Some((path, node.value.as_ref().unwrap()));
                 } else {
                     n -= 1;
@@ -351,7 +580,7 @@ fn get_nth_r<'a, T>(link: &'a Link<T>, mut n: usize, mut path: String) -> Option
             }
             let middle_count = link_count(&node.middle);
             if n < middle_count {
-                path.push(node.label);
+                push_chain_to_string(&node.label, &mut path);
                 return get_nth_r(&node.middle, n, path);
             }
             n -= middle_count;
@@ -360,63 +589,21 @@ fn get_nth_r<'a, T>(link: &'a Link<T>, mut n: usize, mut path: String) -> Option
     }
 }
 
-fn get_r_mut<'a, T>(link: &'a mut Link<T>, label: char, key_tail: &mut Chars) -> Option<&'a mut T> {
-    match *link {
-        None => None,
-
-        Some(ref mut node) => match label.cmp(&node.label) {
-            Less => get_r_mut(&mut node.left, label, key_tail),
-
-            Equal => {
-                let new_label = key_tail.next();
-
-                match new_label {
-                    None => match node.value {
-                        None => None,
-
-                        Some(ref mut value) => Some(value),
-                    },
-
-                    Some(label) => get_r_mut(&mut node.middle, label, key_tail),
-                }
-            }
-
-            Greater => get_r_mut(&mut node.right, label, key_tail),
-        },
-    }
-}
-
-fn remove_r<T>(
-    link: &mut Link<T>,
-    label: char,
-    key_tail: &mut Chars,
-    rebuild_allowed: bool,
-) -> Option<T> {
-    match *link {
-        None => None,
-        Some(ref mut node) => {
+fn remove_r<T>(link: &mut Link<T>, key: &mut Peekable<Chars>, rebuild_allowed: bool) -> Option<T> {
+    match (link.as_mut(), key.peek()) {
+        (Some(ref mut node), Some(label)) => {
             assert!(0 < node.count);
             let rebuild_on_removal;
-            let removed = match label.cmp(&node.label) {
+            let removed = match label.cmp(&node.label.first) {
                 Less => {
                     rebuild_on_removal =
                         rebuild_allowed && needs_rebuild(node.count - 1, link_count(&node.right));
-                    remove_r(
-                        &mut node.left,
-                        label,
-                        key_tail,
-                        rebuild_allowed && !rebuild_on_removal,
-                    )
+                    remove_r(&mut node.left, key, rebuild_allowed && !rebuild_on_removal)
                 }
                 Greater => {
                     rebuild_on_removal =
                         rebuild_allowed && needs_rebuild(node.count - 1, link_count(&node.left));
-                    remove_r(
-                        &mut node.right,
-                        label,
-                        key_tail,
-                        rebuild_allowed && !rebuild_on_removal,
-                    )
+                    remove_r(&mut node.right, key, rebuild_allowed && !rebuild_on_removal)
                 }
                 Equal => {
                     rebuild_on_removal = rebuild_allowed
@@ -424,9 +611,31 @@ fn remove_r<T>(
                             node.count - 1,
                             std::cmp::max(link_count(&node.right), link_count(&node.left)),
                         );
-                    match key_tail.next() {
-                        None => replace(&mut node.value, None),
-                        Some(label) => remove_r(&mut node.middle, label, key_tail, true),
+                    key.next();
+                    let ref rest = traverse_chain(&node.label.rest, key);
+                    match rest {
+                        None => {
+                            let removed = match key.peek() {
+                                None => replace(&mut node.value, None),
+                                Some(_) => remove_r(&mut node.middle, key, true),
+                            };
+                            if node.value.is_none() && node.middle.is_some() {
+                                assert!(removed.is_some());
+                                let ref mut middle = node.middle.as_mut().unwrap();
+                                if middle.left.is_none() && middle.right.is_none() {
+                                    let new_middle = mem::take(&mut middle.middle);
+                                    let old_middle = replace(&mut node.middle, new_middle).unwrap();
+                                    node.value = old_middle.value;
+                                    let mut end = &mut node.label.rest;
+                                    while end.is_some() {
+                                        end = &mut end.as_mut().unwrap().rest;
+                                    }
+                                    *end = Some(Box::from(old_middle.label));
+                                }
+                            }
+                            removed
+                        }
+                        _ => None,
                     }
                     // Node is only needed for as long as it is part of some key:
                     //    node.value.is_none() && node.middle.is_none()
@@ -449,6 +658,7 @@ fn remove_r<T>(
             }
             removed
         }
+        _ => None,
     }
 }
 
@@ -552,371 +762,167 @@ fn stat_r<T>(stats: Stats, link: &Link<T>, matches: usize, sides: usize, depth: 
     }
 }
 
-fn find_complete_root_r<'a, T>(link: &'a Link<T>, label: char, mut key_tail: Chars) -> &'a Link<T> {
-    match *link {
-        None => &link,
-
-        Some(ref node) => match label.cmp(&node.label) {
-            Less => find_complete_root_r(&node.left, label, key_tail),
-
-            Greater => find_complete_root_r(&node.right, label, key_tail),
-
-            Equal => {
-                let new_label = key_tail.next();
-
-                match new_label {
-                    None => &node.middle,
-
-                    Some(label) => find_complete_root_r(&node.middle, label, key_tail),
+fn find_complete_root_gen<'a, LinkRef>(
+    link: LinkRef,
+    key: &mut Peekable<Chars>,
+) -> (Option<&'a CharNode>, Option<LinkRef::NodeRef>)
+where
+    LinkRef: AbstractLinkRef<'a>,
+{
+    match key.peek() {
+        None => (None, link.unwrap()),
+        Some(key_letter) => match link.unwrap() {
+            None => (None, None),
+            Some(node) => {
+                let (label, _value, left, middle, right, _count) = node.unwrap();
+                match key_letter.cmp(&label.first) {
+                    Less => find_complete_root_gen(left, key),
+                    Greater => find_complete_root_gen(right, key),
+                    Equal => {
+                        key.next();
+                        let ref rest = traverse_chain(&label.rest, key);
+                        match (rest, key.peek()) {
+                            (Some(_), Some(_)) => (None, None),
+                            (Some(boxed_char_node), None) => {
+                                (Some(&*boxed_char_node), middle.unwrap())
+                            }
+                            _ => find_complete_root_gen(middle, key),
+                        }
+                    }
                 }
             }
         },
     }
 }
 
-fn find_complete_root_r_mut<'a, T>(
-    link: &'a mut Link<T>,
-    label: char,
-    mut key_tail: Chars,
-) -> &'a mut Link<T> {
-    match *link {
-        None => link,
-
-        Some(ref mut node) => match label.cmp(&node.label) {
-            Less => find_complete_root_r_mut(&mut node.left, label, key_tail),
-
-            Greater => find_complete_root_r_mut(&mut node.right, label, key_tail),
-
-            Equal => {
-                let new_label = key_tail.next();
-
-                match new_label {
-                    None => &mut node.middle,
-
-                    Some(label) => find_complete_root_r_mut(&mut node.middle, label, key_tail),
-                }
-            }
-        },
-    }
-}
-
-fn visit_values_r<T, C>(link: &Link<T>, callback: &mut C)
+fn visit_values_gen<'a, LinkRef, C>(optional_node: Option<LinkRef::NodeRef>, callback: &mut C)
 where
-    C: FnMut(&T),
+    C: FnMut(LinkRef::TRef),
+    LinkRef: AbstractLinkRef<'a>,
 {
-    match *link {
-        None => return,
+    if let Some(node) = optional_node {
+        let (_label, value, left, middle, right, _count) = node.unwrap();
+        visit_values_gen::<LinkRef, C>(left.unwrap(), callback);
 
-        Some(ref node) => {
-            visit_values_r(&node.left, callback);
-
-            if let Some(ref value) = node.value {
-                callback(value);
-            }
-
-            visit_values_r(&node.middle, callback);
-            visit_values_r(&node.right, callback);
+        if let Some(value) = value {
+            callback(value);
         }
+
+        visit_values_gen::<LinkRef, C>(middle.unwrap(), callback);
+        visit_values_gen::<LinkRef, C>(right.unwrap(), callback);
     }
 }
 
-fn visit_values_r_mut<T, C>(link: &mut Link<T>, callback: &mut C)
-where
-    C: FnMut(&mut T),
-{
-    match *link {
-        None => return,
-
-        Some(ref mut node) => {
-            visit_values_r_mut(&mut node.left, callback);
-
-            if let Some(ref mut value) = node.value {
-                callback(value);
+fn traverse_chain_hamming_cost<'a>(
+    a: &'a CharNode,
+    key: &mut Peekable<Chars>,
+    key_len: &mut usize,
+) -> usize {
+    (match &key.peek() {
+        None => 1,
+        Some(&c) => {
+            key.next();
+            *key_len -= 1;
+            if c == a.first {
+                0
+            } else {
+                1
             }
-
-            visit_values_r_mut(&mut node.middle, callback);
-            visit_values_r_mut(&mut node.right, callback);
         }
-    }
+    }) + a
+        .rest
+        .as_ref()
+        .map_or(0, |r| traverse_chain_hamming_cost(&*r, key, key_len))
 }
 
-fn visit_complete_values_r<T, C>(link: &Link<T>, callback: &mut C)
-where
-    C: FnMut(&T),
-{
-    match *link {
-        None => return,
-
-        Some(ref node) => {
-            visit_values_r(&node.left, callback);
-
-            if let Some(ref value) = node.value {
-                callback(value);
-            }
-
-            visit_values_r(&node.middle, callback);
-            visit_values_r(&node.right, callback);
-        }
-    }
-}
-
-fn visit_complete_values_r_mut<T, C>(link: &mut Link<T>, callback: &mut C)
-where
-    C: FnMut(&mut T),
-{
-    match *link {
-        None => return,
-
-        Some(ref mut node) => {
-            visit_values_r_mut(&mut node.left, callback);
-
-            if let Some(ref mut value) = node.value {
-                callback(value);
-            }
-
-            visit_values_r_mut(&mut node.middle, callback);
-            visit_values_r_mut(&mut node.right, callback);
-        }
-    }
-}
-
-fn visit_neighbor_values_r<'a, T, C>(
-    link: &'a Link<T>,
-    label: Option<char>,
-    key_tail: &mut Chars,
-    tail_len: usize,
+fn visit_neighbor_values_gen<'a, LinkRef, C>(
+    link: LinkRef,
+    key: &mut Peekable<Chars>,
+    key_len: usize,
     range: usize,
     callback: &mut C,
 ) where
-    C: FnMut(&T),
+    LinkRef: AbstractLinkRef<'a>,
+    C: FnMut(LinkRef::TRef),
 {
     if range == 0 {
-        if let Some(label) = label {
-            if let Some(value) = get_r(link, label, key_tail) {
-                callback(value);
-            }
+        if let Some(value) = get_gen(link, key) {
+            callback(value);
         }
     } else {
-        if let Some(ref node) = *link {
-            visit_neighbor_values_r(&node.left, label, key_tail, tail_len, range, callback);
-
-            if let Some(ref value) = node.value {
-                let new_range = match label {
-                    None => range - 1,
-
-                    Some(label) => {
-                        if label == node.label {
-                            range
-                        } else {
-                            range - 1
-                        }
+        if let Some(node) = link.unwrap() {
+            let (label, value, left, middle, right, _count) = node.unwrap();
+            visit_neighbor_values_gen(left, key, key_len, range, callback);
+            {
+                let mut new_key = key.clone();
+                let mut new_key_len = key_len;
+                let cost = traverse_chain_hamming_cost(label, &mut new_key, &mut new_key_len);
+                if cost + new_key_len <= range {
+                    if let Some(value) = value {
+                        callback(value);
                     }
-                };
-
-                if tail_len <= new_range {
-                    callback(value);
+                    visit_neighbor_values_gen(
+                        middle,
+                        &mut new_key,
+                        new_key_len,
+                        range - cost,
+                        callback,
+                    );
                 }
             }
-
-            {
-                let new_range = match label {
-                    None => range - 1,
-
-                    Some(label) => {
-                        if label == node.label {
-                            range
-                        } else {
-                            range - 1
-                        }
-                    }
-                };
-
-                let mut new_tail = key_tail.clone();
-                let new_label = new_tail.next();
-
-                let new_len = if tail_len > 0 { tail_len - 1 } else { tail_len };
-
-                visit_neighbor_values_r(
-                    &node.middle,
-                    new_label,
-                    &mut new_tail,
-                    new_len,
-                    new_range,
-                    callback,
-                );
-            }
-
-            visit_neighbor_values_r(&node.right, label, key_tail, tail_len, range, callback);
+            visit_neighbor_values_gen(right, key, key_len, range, callback);
         }
     }
 }
-
-fn visit_neighbor_values_r_mut<'a, T, C>(
-    link: &'a mut Link<T>,
-    label: Option<char>,
-    key_tail: &mut Chars,
-    tail_len: usize,
-    range: usize,
-    callback: &mut C,
-) where
-    C: FnMut(&mut T),
-{
-    if range == 0 {
-        if let Some(label) = label {
-            if let Some(value) = get_r_mut(link, label, key_tail) {
-                callback(value);
-            }
-        }
-    } else {
-        if let Some(ref mut node) = *link {
-            let label_tmp = node.label;
-
-            visit_neighbor_values_r_mut(&mut node.left, label, key_tail, tail_len, range, callback);
-
-            if let Some(ref mut value) = node.value {
-                let new_range = match label {
-                    None => range - 1,
-
-                    Some(label) => {
-                        if label == label_tmp {
-                            range
-                        } else {
-                            range - 1
-                        }
-                    }
-                };
-
-                if tail_len <= new_range {
-                    callback(value);
+fn can_traverse_chain_with_jokers(
+    char_node: &CharNode,
+    key: &mut Peekable<Chars>,
+    joker: char,
+) -> bool {
+    match key.peek() {
+        Some(label) if label == &char_node.first || label == &joker => {
+            key.next();
+            match &char_node.rest {
+                None => true,
+                Some(boxed_char_node) => {
+                    can_traverse_chain_with_jokers(&boxed_char_node, key, joker)
                 }
             }
-
-            {
-                let new_range = match label {
-                    None => range - 1,
-
-                    Some(label) => {
-                        if label == node.label {
-                            range
-                        } else {
-                            range - 1
-                        }
-                    }
-                };
-
-                let mut new_tail = key_tail.clone();
-                let new_label = new_tail.next();
-
-                let new_len = if tail_len > 0 { tail_len - 1 } else { tail_len };
-
-                visit_neighbor_values_r_mut(
-                    &mut node.middle,
-                    new_label,
-                    &mut new_tail,
-                    new_len,
-                    new_range,
-                    callback,
-                );
-            }
-
-            visit_neighbor_values_r_mut(
-                &mut node.right,
-                label,
-                key_tail,
-                tail_len,
-                range,
-                callback,
-            );
         }
+        _ => false,
     }
 }
 
-fn visit_crossword_values_r<'a, T, C>(
-    link: &'a Link<T>,
-    label: char,
-    key_tail: &mut Chars,
+fn visit_crossword_values_gen<'a, LinkRef, C>(
+    link: LinkRef,
+    key: &mut Peekable<Chars>,
     joker: char,
     callback: &mut C,
 ) where
-    C: FnMut(&T),
+    LinkRef: AbstractLinkRef<'a>,
+    C: FnMut(LinkRef::TRef),
 {
-    match *link {
-        None => return,
+    if let (Some(node), Some(&key_letter)) = (link.unwrap(), key.peek()) {
+        let (label, value, left, middle, right, _count) = node.unwrap();
+        if key_letter == joker || key_letter < label.first {
+            visit_crossword_values_gen(left, key, joker, callback);
+        }
 
-        Some(ref node) => {
-            if label == joker || label < node.label {
-                visit_crossword_values_r(&node.left, label, key_tail, joker, callback);
-            }
-
-            if label == joker || label == node.label {
-                let mut new_tail = key_tail.clone();
-                let new_label = new_tail.next();
-
-                match new_label {
-                    None => {
-                        if let Some(ref value) = node.value {
-                            callback(value);
-                        }
+        let mut new_key = key.clone();
+        if can_traverse_chain_with_jokers(label, &mut new_key, joker) {
+            match new_key.peek() {
+                None => {
+                    if let Some(value) = value {
+                        callback(value);
                     }
-
-                    Some(label) => visit_crossword_values_r(
-                        &node.middle,
-                        label,
-                        &mut new_tail,
-                        joker,
-                        callback,
-                    ),
                 }
-            }
 
-            if label == joker || label > node.label {
-                visit_crossword_values_r(&node.right, label, key_tail, joker, callback);
+                _ => visit_crossword_values_gen(middle, &mut new_key, joker, callback),
             }
         }
-    }
-}
 
-fn visit_crossword_values_r_mut<'a, T, C>(
-    link: &'a mut Link<T>,
-    label: char,
-    key_tail: &mut Chars,
-    joker: char,
-    callback: &mut C,
-) where
-    C: FnMut(&mut T),
-{
-    match *link {
-        None => return,
-
-        Some(ref mut node) => {
-            if label == joker || label < node.label {
-                visit_crossword_values_r_mut(&mut node.left, label, key_tail, joker, callback);
-            }
-
-            if label == joker || label == node.label {
-                let mut new_tail = key_tail.clone();
-                let new_label = new_tail.next();
-
-                match new_label {
-                    None => {
-                        if let Some(ref mut value) = node.value {
-                            callback(value);
-                        }
-                    }
-
-                    Some(label) => visit_crossword_values_r_mut(
-                        &mut node.middle,
-                        label,
-                        &mut new_tail,
-                        joker,
-                        callback,
-                    ),
-                }
-            }
-
-            if label == joker || label > node.label {
-                visit_crossword_values_r_mut(&mut node.right, label, key_tail, joker, callback);
-            }
+        if key_letter == joker || key_letter > label.first {
+            visit_crossword_values_gen(right, key, joker, callback);
         }
     }
 }
@@ -954,7 +960,7 @@ fn pretty_print_r<'a, T>(link: &'a Link<T>, ids: &mut Tst<usize>, writer: &mut d
 
                 let _ = writeln!(
                     writer,
-                    r#"N{} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0"><TR><TD COLSPAN="3">{} {}</TD></TR><TR><TD PORT="l"></TD><TD PORT="m"></TD><TD PORT="r"></TD></TR></TABLE>>]"#,
+                    r#"N{} [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0"><TR><TD COLSPAN="3">{} {:?}</TD></TR><TR><TD PORT="l"></TD><TD PORT="m"></TD><TD PORT="r"></TD></TR></TABLE>>]"#,
                     get_id(node),
                     value_box,
                     node.label
@@ -1057,13 +1063,7 @@ impl<T> Tst<T> {
     /// assert_eq!(v, Some(&"🍄🍄"));
 
     pub fn get(&self, key: &str) -> Option<&T> {
-        let mut key_tail = key.chars();
-
-        match key_tail.next() {
-            None => None,
-
-            Some(label) => get_r(&self.root, label, &mut key_tail),
-        }
+        get_gen(&self.root, &mut key.chars().peekable())
     }
 
     pub fn get_nth(&self, n: usize) -> Option<(String, &T)> {
@@ -1085,13 +1085,7 @@ impl<T> Tst<T> {
     /// assert_eq!(v, Some(&"🍄🍄".to_string()));
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut T> {
-        let mut key_tail = key.chars();
-
-        match key_tail.next() {
-            None => None,
-
-            Some(label) => get_r_mut(&mut self.root, label, &mut key_tail),
-        }
+        get_gen(&mut self.root, &mut key.chars().peekable())
     }
 
     /// Removes the value associated with `key` from the tree, and returns it. Does nothing if no value is
@@ -1109,13 +1103,7 @@ impl<T> Tst<T> {
     /// assert_eq!(v, None);
 
     pub fn remove(&mut self, key: &str) -> Option<T> {
-        let mut key_tail = key.chars();
-
-        match key_tail.next() {
-            None => None,
-
-            Some(label) => remove_r(&mut self.root, label, &mut key_tail, true),
-        }
+        remove_r(&mut self.root, &mut key.chars().peekable(), true)
     }
 
     /// Returns the number of values stored in the tree.
@@ -1196,7 +1184,7 @@ impl<T> Tst<T> {
     where
         C: FnMut(&T),
     {
-        visit_values_r(&self.root, &mut callback);
+        visit_values_gen::<&Link<T>, C>((&self.root).unwrap(), &mut callback);
     }
 
     /// Recursively walks the tree and calls `callback` closure on each mutable value. The same as
@@ -1207,7 +1195,7 @@ impl<T> Tst<T> {
     where
         C: FnMut(&mut T),
     {
-        visit_values_r_mut(&mut self.root, &mut callback);
+        visit_values_gen::<&mut Link<T>, C>((&mut self.root).unwrap(), &mut callback);
     }
 
     /// Recursively walks the tree and calls `callback` closure on each immutable value whose key begins with
@@ -1244,16 +1232,9 @@ impl<T> Tst<T> {
     where
         C: FnMut(&T),
     {
-        let mut prefix_tail = key_prefix.chars();
-
-        match prefix_tail.next() {
-            None => visit_values_r(&self.root, &mut callback),
-
-            Some(label) => {
-                let new_root = find_complete_root_r(&self.root, label, prefix_tail);
-                visit_complete_values_r(new_root, &mut callback)
-            }
-        }
+        let (_, new_root) =
+            find_complete_root_gen::<&Link<T>>(&self.root, &mut key_prefix.chars().peekable());
+        visit_values_gen::<&Link<T>, C>(new_root, &mut callback);
     }
 
     /// Recursively walks the tree and calls `callback` closure on each mutable value whose key begins with
@@ -1264,16 +1245,11 @@ impl<T> Tst<T> {
     where
         C: FnMut(&mut T),
     {
-        let mut prefix_tail = key_prefix.chars();
-
-        match prefix_tail.next() {
-            None => visit_values_r_mut(&mut self.root, &mut callback),
-
-            Some(label) => {
-                let mut new_root = find_complete_root_r_mut(&mut self.root, label, prefix_tail);
-                visit_complete_values_r_mut(&mut new_root, &mut callback)
-            }
-        }
+        let (_, new_root) = find_complete_root_gen::<&mut Link<T>>(
+            &mut self.root,
+            &mut key_prefix.chars().peekable(),
+        );
+        visit_values_gen::<&mut Link<T>, C>(new_root, &mut callback)
     }
 
     /// Recursively walks the tree and calls `callback` closure on each immutable value whose key is _close_ to
@@ -1310,16 +1286,10 @@ impl<T> Tst<T> {
     where
         C: FnMut(&T),
     {
-        let mut key_tail = key.chars();
-        let key_len = key.chars().count();
-        let label = key_tail.next();
-        let tail_len = if key_len == 0 { 0 } else { key_len - 1 };
-
-        visit_neighbor_values_r(
+        visit_neighbor_values_gen::<&Link<T>, C>(
             &self.root,
-            label,
-            &mut key_tail,
-            tail_len,
+            &mut key.chars().peekable(),
+            key.chars().count(),
             range,
             &mut callback,
         );
@@ -1334,16 +1304,10 @@ impl<T> Tst<T> {
     where
         C: FnMut(&mut T),
     {
-        let mut key_tail = key.chars();
-        let key_len = key.chars().count();
-        let label = key_tail.next();
-        let tail_len = if key_len == 0 { 0 } else { key_len - 1 };
-
-        visit_neighbor_values_r_mut(
+        visit_neighbor_values_gen::<&mut Link<T>, C>(
             &mut self.root,
-            label,
-            &mut key_tail,
-            tail_len,
+            &mut key.chars().peekable(),
+            key.chars().count(),
             range,
             &mut callback,
         );
@@ -1383,15 +1347,12 @@ impl<T> Tst<T> {
     where
         C: FnMut(&T),
     {
-        let mut pattern_tail = pattern.chars();
-
-        match pattern_tail.next() {
-            None => return,
-
-            Some(label) => {
-                visit_crossword_values_r(&self.root, label, &mut pattern_tail, joker, &mut callback)
-            }
-        }
+        visit_crossword_values_gen::<&Link<T>, C>(
+            &self.root,
+            &mut pattern.chars().peekable(),
+            joker,
+            &mut callback,
+        )
     }
 
     /// Recursively walks the tree and calls `callback` closure on each mutable value whose key _matches_ `pattern`
@@ -1403,19 +1364,12 @@ impl<T> Tst<T> {
     where
         C: FnMut(&mut T),
     {
-        let mut pattern_tail = pattern.chars();
-
-        match pattern_tail.next() {
-            None => return,
-
-            Some(label) => visit_crossword_values_r_mut(
-                &mut self.root,
-                label,
-                &mut pattern_tail,
-                joker,
-                &mut callback,
-            ),
-        }
+        visit_crossword_values_gen::<&mut Link<T>, C>(
+            &mut self.root,
+            &mut pattern.chars().peekable(),
+            joker,
+            &mut callback,
+        )
     }
 
     /// Dump the tree in `writer` using the _dot_ language of [Graphviz]( http://www.graphviz.org) tools. A checked
@@ -1639,7 +1593,7 @@ macro_rules! gen_it_path {
 
             for todo in self.$todo_x.iter() {
                 if todo.1 == $a1 || todo.1 == $a2 {
-                    path.push(todo.0.label);
+                    push_chain_to_string(&todo.0.label, &mut path);
                 }
             }
 
@@ -1650,10 +1604,10 @@ macro_rules! gen_it_path {
 
 impl<'a, T> TstIterator<'a, T> {
     pub fn new(tst: &'a Tst<T>) -> Self {
-        TstIterator::new_from_root(&tst.root)
+        TstIterator::new_from_root((&tst.root).unwrap())
     }
 
-    fn new_from_root(root: &'a Link<T>) -> Self {
+    fn new_from_root(root: Option<&'a Node<T>>) -> Self {
         let mut it = TstIterator {
             todo_i: Vec::new(),
             last_i: None,
@@ -1661,7 +1615,7 @@ impl<'a, T> TstIterator<'a, T> {
             last_j: None,
         };
 
-        if let Some(ref node) = root {
+        if let Some(node) = root {
             it.todo_i.push((node, GoLeft));
             it.todo_j.push((node, GoRight));
         }
@@ -1810,19 +1764,15 @@ pub struct TstCompleteIterator<'a, T: 'a> {
 
 impl<'a, T> TstCompleteIterator<'a, T> {
     pub fn new(tst: &'a Tst<T>, key_prefix: &str) -> Self {
-        let mut key_tail = key_prefix.chars();
-
+        let (prefix, new_root) =
+            find_complete_root_gen::<&Link<T>>(&tst.root, &mut key_prefix.chars().peekable());
+        let mut path = key_prefix.to_string();
+        if let Some(char_node) = prefix {
+            push_chain_to_string(char_node, &mut path)
+        }
         TstCompleteIterator {
-            it: match key_tail.next() {
-                None => TstIterator::<T>::new(tst),
-
-                Some(label) => {
-                    let new_root = find_complete_root_r(&tst.root, label, key_tail);
-                    TstIterator::<T>::new_from_root(new_root)
-                }
-            },
-
-            prefix: key_prefix.to_string(),
+            it: TstIterator::<T>::new_from_root(new_root),
+            prefix: path,
         }
     }
 
@@ -1849,30 +1799,31 @@ impl<'a, T> DoubleEndedIterator for TstCompleteIterator<'a, T> {
     }
 }
 
+type TstNeighborIteratorTodoItem<'a, 'b, T> = (
+    /*node:*/
+    &'a Node<T>,
+    /*action:*/
+    TstIteratorAction,
+    /*key:*/
+    Peekable<Chars<'b>>,
+    /*key_len:*/
+    usize,
+    /*range:*/
+    usize,
+);
+
+type TstNeighborIteratorTodo<'a, 'b, T> = Vec<TstNeighborIteratorTodoItem<'a, 'b, T>>;
+
 /// A [double-ended]( http://doc.rust-lang.org/std/iter/trait.DoubleEndedIterator.html) iterator which
 /// successively returns all values whose key is _close_ to `key`. See [`iter_neighbor`](
 /// struct.Tst.html#method.iter_neighbor) method for a brief description with a short example.
 
 #[derive(Debug)]
 pub struct TstNeighborIterator<'a, 'b, T: 'a> {
-    todo_i: Vec<(
-        &'a Node<T>,
-        TstIteratorAction,
-        Option<char>,
-        Chars<'b>,
-        usize,
-        usize,
-    )>,
+    todo_i: TstNeighborIteratorTodo<'a, 'b, T>,
     last_i: Option<&'a Node<T>>,
 
-    todo_j: Vec<(
-        &'a Node<T>,
-        TstIteratorAction,
-        Option<char>,
-        Chars<'b>,
-        usize,
-        usize,
-    )>,
+    todo_j: TstNeighborIteratorTodo<'a, 'b, T>,
     last_j: Option<&'a Node<T>>,
 }
 
@@ -1886,15 +1837,11 @@ impl<'a, 'b, T> TstNeighborIterator<'a, 'b, T> {
         };
 
         if let Some(ref node) = &tst.root {
-            let mut key_tail = key.chars();
             let key_len = key.chars().count();
-            let label = key_tail.next();
-            let tail_len = if key_len == 0 { 0 } else { key_len - 1 };
-
             it.todo_i
-                .push((node, GoLeft, label, key_tail.clone(), tail_len, range));
+                .push((node, GoLeft, key.chars().peekable(), key_len, range));
             it.todo_j
-                .push((node, GoRight, label, key_tail, tail_len, range));
+                .push((node, GoRight, key.chars().peekable(), key_len, range));
         }
 
         it
@@ -1910,21 +1857,15 @@ impl<'a, 'b, T> Iterator for TstNeighborIterator<'a, 'b, T> {
     fn next(&mut self) -> Option<&'a T> {
         let mut found = None;
 
-        while let Some((node, action, label, mut key_tail, tail_len, range)) = self.todo_i.pop() {
+        while let Some((node, action, mut key, mut key_len, range)) = self.todo_i.pop() {
             match action {
                 GoLeft => {
-                    self.todo_i
-                        .push((node, Visit, label, key_tail.clone(), tail_len, range));
+                    self.todo_i.push((node, Visit, key.clone(), key_len, range));
 
-                    if let Some(label) = label {
-                        if range == 0 && label >= node.label {
-                            continue;
+                    if 0 < range || key.peek().map_or(false, |label| label < &node.label.first) {
+                        if let Some(ref child) = node.left {
+                            self.todo_i.push((child, GoLeft, key, key_len, range));
                         }
-                    }
-
-                    if let Some(ref child) = node.left {
-                        self.todo_i
-                            .push((child, GoLeft, label, key_tail, tail_len, range));
                     }
                 }
 
@@ -1942,73 +1883,37 @@ impl<'a, 'b, T> Iterator for TstNeighborIterator<'a, 'b, T> {
                     }
 
                     self.todo_i
-                        .push((node, GoMiddle, label, key_tail, tail_len, range));
+                        .push((node, GoMiddle, key.clone(), key_len, range));
 
                     if let Some(ref value) = node.value {
-                        let delta = match label {
-                            None => 1,
+                        let cost = traverse_chain_hamming_cost(&node.label, &mut key, &mut key_len);
 
-                            Some(label) => {
-                                if label == node.label {
-                                    0
-                                } else {
-                                    1
-                                }
-                            }
-                        };
-
-                        if range >= delta {
-                            let new_range = range - delta;
-
-                            if tail_len <= new_range {
-                                self.last_i = Some(node);
-                                found = Some(value);
-
-                                break;
-                            }
+                        if cost + key_len <= range {
+                            self.last_i = Some(node);
+                            found = Some(value);
+                            break;
                         }
                     }
                 }
 
                 GoMiddle => {
                     self.todo_i
-                        .push((node, GoRight, label, key_tail.clone(), tail_len, range));
+                        .push((node, GoRight, key.clone(), key_len, range));
+                    let cost = traverse_chain_hamming_cost(&node.label, &mut key, &mut key_len);
 
-                    let delta = match label {
-                        None => 1,
-
-                        Some(label) => {
-                            if label == node.label {
-                                0
-                            } else {
-                                1
-                            }
-                        }
-                    };
-
-                    if range >= delta {
-                        let new_range = range - delta;
-
-                        let new_label = key_tail.next();
-                        let new_len = if tail_len > 0 { tail_len - 1 } else { tail_len };
-
+                    if cost <= range {
                         if let Some(ref child) = node.middle {
                             self.todo_i
-                                .push((child, GoLeft, new_label, key_tail, new_len, new_range));
+                                .push((child, GoLeft, key, key_len, range - cost));
                         }
                     }
                 }
 
                 GoRight => {
-                    if let Some(label) = label {
-                        if range == 0 && label <= node.label {
-                            continue;
+                    if 0 < range || key.peek().map_or(false, |label| label > &node.label.first) {
+                        if let Some(ref child) = node.right {
+                            self.todo_i.push((child, GoLeft, key, key_len, range));
                         }
-                    }
-
-                    if let Some(ref child) = node.right {
-                        self.todo_i
-                            .push((child, GoLeft, label, key_tail, tail_len, range));
                     }
                 }
             }
@@ -2022,21 +1927,15 @@ impl<'a, 'b, T> DoubleEndedIterator for TstNeighborIterator<'a, 'b, T> {
     fn next_back(&mut self) -> Option<&'a T> {
         let mut found = None;
 
-        while let Some((node, action, label, mut key_tail, tail_len, range)) = self.todo_j.pop() {
+        while let Some((node, action, mut key, mut key_len, range)) = self.todo_j.pop() {
             match action {
                 GoRight => {
                     self.todo_j
-                        .push((node, GoMiddle, label, key_tail.clone(), tail_len, range));
-
-                    if let Some(label) = label {
-                        if range == 0 && label <= node.label {
-                            continue;
+                        .push((node, GoMiddle, key.clone(), key_len, range));
+                    if 0 < range || key.peek().map_or(false, |label| label > &node.label.first) {
+                        if let Some(ref child) = node.right {
+                            self.todo_j.push((child, GoRight, key, key_len, range));
                         }
-                    }
-
-                    if let Some(ref child) = node.right {
-                        self.todo_j
-                            .push((child, GoRight, label, key_tail, tail_len, range));
                     }
                 }
 
@@ -2054,73 +1953,36 @@ impl<'a, 'b, T> DoubleEndedIterator for TstNeighborIterator<'a, 'b, T> {
                     }
 
                     self.todo_j
-                        .push((node, GoLeft, label, key_tail, tail_len, range));
+                        .push((node, GoLeft, key.clone(), key_len, range));
 
                     if let Some(ref value) = node.value {
-                        let delta = match label {
-                            None => 1,
+                        let cost = traverse_chain_hamming_cost(&node.label, &mut key, &mut key_len);
 
-                            Some(label) => {
-                                if label == node.label {
-                                    0
-                                } else {
-                                    1
-                                }
-                            }
-                        };
-
-                        if range >= delta {
-                            let new_range = range - delta;
-
-                            if tail_len <= new_range {
-                                self.last_j = Some(node);
-                                found = Some(value);
-
-                                break;
-                            }
+                        if cost + key_len <= range {
+                            self.last_j = Some(node);
+                            found = Some(value);
+                            break;
                         }
                     }
                 }
 
                 GoMiddle => {
-                    self.todo_j
-                        .push((node, Visit, label, key_tail.clone(), tail_len, range));
+                    self.todo_j.push((node, Visit, key.clone(), key_len, range));
 
-                    let delta = match label {
-                        None => 1,
-
-                        Some(label) => {
-                            if label == node.label {
-                                0
-                            } else {
-                                1
-                            }
-                        }
-                    };
-
-                    if range >= delta {
-                        let new_range = range - delta;
-
-                        let new_label = key_tail.next();
-                        let new_len = if tail_len > 0 { tail_len - 1 } else { tail_len };
-
+                    let cost = traverse_chain_hamming_cost(&node.label, &mut key, &mut key_len);
+                    if cost <= range {
                         if let Some(ref child) = node.middle {
                             self.todo_j
-                                .push((child, GoRight, new_label, key_tail, new_len, new_range));
+                                .push((child, GoRight, key, key_len, range - cost));
                         }
                     }
                 }
 
                 GoLeft => {
-                    if let Some(label) = label {
-                        if range == 0 && label >= node.label {
-                            continue;
+                    if 0 < range || key.peek().map_or(false, |label| label < &node.label.first) {
+                        if let Some(ref child) = node.left {
+                            self.todo_j.push((child, GoRight, key, key_len, range));
                         }
-                    }
-
-                    if let Some(ref child) = node.left {
-                        self.todo_j
-                            .push((child, GoRight, label, key_tail, tail_len, range));
                     }
                 }
             }
@@ -2136,10 +1998,10 @@ impl<'a, 'b, T> DoubleEndedIterator for TstNeighborIterator<'a, 'b, T> {
 
 #[derive(Debug)]
 pub struct TstCrosswordIterator<'a, 'b, T: 'a> {
-    todo_i: Vec<(&'a Node<T>, TstIteratorAction, char, Chars<'b>, usize)>,
+    todo_i: Vec<(&'a Node<T>, TstIteratorAction, Peekable<Chars<'b>>)>,
     last_i: Option<&'a Node<T>>,
 
-    todo_j: Vec<(&'a Node<T>, TstIteratorAction, char, Chars<'b>, usize)>,
+    todo_j: Vec<(&'a Node<T>, TstIteratorAction, Peekable<Chars<'b>>)>,
     last_j: Option<&'a Node<T>>,
 
     joker: char,
@@ -2156,15 +2018,8 @@ impl<'a, 'b, T> TstCrosswordIterator<'a, 'b, T> {
         };
 
         if let Some(ref node) = &tst.root {
-            let mut key_tail = key.chars();
-
-            if let Some(label) = key_tail.next() {
-                let tail_len = key.chars().count() - 1;
-
-                it.todo_i
-                    .push((node, GoLeft, label, key_tail.clone(), tail_len));
-                it.todo_j.push((node, GoRight, label, key_tail, tail_len));
-            }
+            it.todo_i.push((node, GoLeft, key.chars().peekable()));
+            it.todo_j.push((node, GoRight, key.chars().peekable()));
         }
 
         it
@@ -2180,15 +2035,13 @@ impl<'a, 'b, T> Iterator for TstCrosswordIterator<'a, 'b, T> {
     fn next(&mut self) -> Option<&'a T> {
         let mut found = None;
 
-        while let Some((node, action, label, mut key_tail, tail_len)) = self.todo_i.pop() {
+        while let Some((node, action, mut key)) = self.todo_i.pop() {
             match action {
                 GoLeft => {
-                    self.todo_i
-                        .push((node, Visit, label, key_tail.clone(), tail_len));
-
-                    if label == self.joker || label < node.label {
-                        if let Some(ref child) = node.left {
-                            self.todo_i.push((child, GoLeft, label, key_tail, tail_len));
+                    self.todo_i.push((node, Visit, key.clone()));
+                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.left.as_ref()) {
+                        if key_letter == self.joker || key_letter < node.label.first {
+                            self.todo_i.push((child, GoLeft, key));
                         }
                     }
                 }
@@ -2205,43 +2058,34 @@ impl<'a, 'b, T> Iterator for TstCrosswordIterator<'a, 'b, T> {
                             }
                         }
                     }
-
-                    self.todo_i
-                        .push((node, GoMiddle, label, key_tail, tail_len));
+                    self.todo_i.push((node, GoMiddle, key.clone()));
 
                     if let Some(ref value) = node.value {
-                        if tail_len == 0 && (label == self.joker || label == node.label) {
-                            self.last_i = Some(node);
-                            found = Some(value);
-
-                            break;
-                        }
-                    }
-                }
-
-                GoMiddle => {
-                    self.todo_i
-                        .push((node, GoRight, label, key_tail.clone(), tail_len));
-
-                    if label == self.joker || label == node.label {
-                        if let Some(ref child) = node.middle {
-                            if let Some(new_label) = key_tail.next() {
-                                self.todo_i.push((
-                                    child,
-                                    GoLeft,
-                                    new_label,
-                                    key_tail,
-                                    tail_len - 1,
-                                ));
+                        if can_traverse_chain_with_jokers(&node.label, &mut key, self.joker) {
+                            if key.peek().is_none() {
+                                self.last_i = Some(node);
+                                found = Some(value);
+                                break;
                             }
                         }
                     }
                 }
 
+                GoMiddle => {
+                    self.todo_i.push((node, GoRight, key.clone()));
+
+                    if let Some(ref child) = node.middle {
+                        if can_traverse_chain_with_jokers(&node.label, &mut key, self.joker) {
+                            self.todo_i.push((child, GoLeft, key));
+                        }
+                    }
+                }
+
                 GoRight => {
-                    if label == self.joker || label > node.label {
-                        if let Some(ref child) = node.right {
-                            self.todo_i.push((child, GoLeft, label, key_tail, tail_len));
+                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.right.as_ref())
+                    {
+                        if key_letter == self.joker || key_letter > node.label.first {
+                            self.todo_i.push((child, GoLeft, key));
                         }
                     }
                 }
@@ -2256,16 +2100,14 @@ impl<'a, 'b, T> DoubleEndedIterator for TstCrosswordIterator<'a, 'b, T> {
     fn next_back(&mut self) -> Option<&'a T> {
         let mut found = None;
 
-        while let Some((node, action, label, mut key_tail, tail_len)) = self.todo_j.pop() {
+        while let Some((node, action, mut key)) = self.todo_j.pop() {
             match action {
                 GoRight => {
-                    self.todo_j
-                        .push((node, GoMiddle, label, key_tail.clone(), tail_len));
-
-                    if label == self.joker || label > node.label {
-                        if let Some(ref child) = node.right {
-                            self.todo_j
-                                .push((child, GoRight, label, key_tail, tail_len));
+                    self.todo_j.push((node, GoMiddle, key.clone()));
+                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.right.as_ref())
+                    {
+                        if key_letter == self.joker || key_letter > node.label.first {
+                            self.todo_j.push((child, GoRight, key));
                         }
                     }
                 }
@@ -2283,42 +2125,34 @@ impl<'a, 'b, T> DoubleEndedIterator for TstCrosswordIterator<'a, 'b, T> {
                         }
                     }
 
-                    self.todo_j.push((node, GoLeft, label, key_tail, tail_len));
+                    self.todo_j.push((node, GoLeft, key.clone()));
 
                     if let Some(ref value) = node.value {
-                        if tail_len == 0 && (label == self.joker || label == node.label) {
-                            self.last_j = Some(node);
-                            found = Some(value);
-
-                            break;
-                        }
-                    }
-                }
-
-                GoMiddle => {
-                    self.todo_j
-                        .push((node, Visit, label, key_tail.clone(), tail_len));
-
-                    if label == self.joker || label == node.label {
-                        if let Some(ref child) = node.middle {
-                            if let Some(new_label) = key_tail.next() {
-                                self.todo_j.push((
-                                    child,
-                                    GoRight,
-                                    new_label,
-                                    key_tail,
-                                    tail_len - 1,
-                                ));
+                        if can_traverse_chain_with_jokers(&node.label, &mut key, self.joker) {
+                            if key.peek().is_none() {
+                                self.last_j = Some(node);
+                                found = Some(value);
+                                break;
                             }
                         }
                     }
                 }
 
+                GoMiddle => {
+                    self.todo_j.push((node, Visit, key.clone()));
+
+                    if let Some(ref child) = node.middle {
+                        if can_traverse_chain_with_jokers(&node.label, &mut key, self.joker) {
+                            self.todo_j.push((child, GoRight, key));
+                        }
+                    }
+                }
+
                 GoLeft => {
-                    if label == self.joker || label < node.label {
-                        if let Some(ref child) = node.left {
-                            self.todo_j
-                                .push((child, GoRight, label, key_tail, tail_len));
+                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.right.as_ref())
+                    {
+                        if key_letter == self.joker || key_letter < node.label.first {
+                            self.todo_j.push((child, GoRight, key));
                         }
                     }
                 }
