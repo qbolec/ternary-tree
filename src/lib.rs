@@ -448,6 +448,7 @@ fn insert_r<T>(
         *link = Some(Box::new(Node::<T> {
             label: CharNode::from_chars(label, key_tail),
             count: 1,
+            value: Some(value),
             ..Default::default()
         }));
         return None;
@@ -473,6 +474,7 @@ fn insert_r<T>(
                 Some(label) => insert_r(&mut node.middle, label, key_tail, value, true),
             },
             Some(suffix) => {
+                node.verify_count();
                 let spawned = Some(Box::new(Node::<T> {
                     label: *suffix,
                     count: node.count - link_count(&node.left) - link_count(&node.right),
@@ -481,6 +483,7 @@ fn insert_r<T>(
                     left: None,
                     right: None,
                 }));
+                spawned.as_ref().unwrap().verify_count();
                 node.middle = spawned;
                 match different_label {
                     None => replace(&mut node.value, Some(value)),
@@ -620,9 +623,9 @@ fn remove_r<T>(link: &mut Link<T>, key: &mut Peekable<Chars>, rebuild_allowed: b
                                 Some(_) => remove_r(&mut node.middle, key, true),
                             };
                             if node.value.is_none() && node.middle.is_some() {
-                                assert!(removed.is_some());
                                 let ref mut middle = node.middle.as_mut().unwrap();
                                 if middle.left.is_none() && middle.right.is_none() {
+                                    assert!(removed.is_some());
                                     let new_middle = mem::take(&mut middle.middle);
                                     let old_middle = replace(&mut node.middle, new_middle).unwrap();
                                     node.value = old_middle.value;
@@ -684,6 +687,7 @@ pub struct KeyLenStat {
 #[derive(Default, PartialEq, Debug)]
 pub struct CountStat {
     pub nodes: usize,
+    pub char_nodes: usize,
     pub values: usize,
 }
 
@@ -692,6 +696,7 @@ pub struct CountStat {
 #[derive(Default, PartialEq, Debug)]
 pub struct BytesStat {
     pub node: usize,
+    pub char_node: usize,
     pub total: usize,
 }
 
@@ -708,7 +713,8 @@ pub struct BytesStat {
 /// * `count.values` number of nodes which store a value (same as [len]( ./struct.Tst.html#method.len))
 /// * `bytes.node` byte size of a node (including the fixed size of a value, but excluding heap allocated memory of
 /// this value)
-/// * `bytes.total` total number of bytes allocated for nodes (`count.nodes` * `bytes.node`)
+/// * `bytes.char_node` bytes per single CharNode
+/// * `bytes.total` total number of bytes allocated for nodes
 
 #[derive(Default, PartialEq, Debug)]
 pub struct Stats {
@@ -726,6 +732,12 @@ fn stat_r<T>(stats: Stats, link: &Link<T>, matches: usize, sides: usize, depth: 
             let mut stats = stat_r(stats, &node.left, matches, sides + 1, depth + 1);
 
             stats.count.nodes += 1;
+            stats.count.char_nodes += 1;
+            let mut rest = &node.label.rest;
+            while let Some(char_node) = rest {
+                stats.count.char_nodes += 1;
+                rest = &char_node.rest;
+            }
 
             if node.value.is_some() {
                 let matches = matches + 1;
@@ -857,10 +869,16 @@ fn visit_neighbor_values_gen<'a, LinkRef, C>(
                 let mut new_key = key.clone();
                 let mut new_key_len = key_len;
                 let cost = traverse_chain_hamming_cost(label, &mut new_key, &mut new_key_len);
+                println!(
+                    "label is {:?} key len was {:?} now is {:?} and cost is {:?}",
+                    label, key_len, new_key_len, cost
+                );
                 if cost + new_key_len <= range {
                     if let Some(value) = value {
                         callback(value);
                     }
+                }
+                if cost <= range {
                     visit_neighbor_values_gen(
                         middle,
                         &mut new_key,
@@ -1133,7 +1151,7 @@ impl<T> Tst<T> {
     /// assert_eq!(map.len(), 1);
     ///
     /// let stats = map.stat();
-    /// assert_eq!(stats.count.nodes, 3);
+    /// assert_eq!(stats.count.nodes, 1);
     /// ```
     ///
     /// See [Stats]( ./struct.Stats.html) for a detailed description of available fields.
@@ -1144,7 +1162,10 @@ impl<T> Tst<T> {
         let mut stats = stat_r(empty_stats, &self.root, 0, 0, 0);
 
         stats.bytes.node = mem::size_of::<Node<T>>();
-        stats.bytes.total = mem::size_of::<Tst<T>>() + stats.count.nodes * stats.bytes.node;
+        stats.bytes.char_node = mem::size_of::<CharNode>();
+        stats.bytes.total = mem::size_of::<Tst<T>>()
+            + stats.count.nodes * stats.bytes.node
+            + (stats.count.char_nodes - stats.count.nodes) * stats.bytes.char_node;
 
         stats
     }
@@ -2149,8 +2170,7 @@ impl<'a, 'b, T> DoubleEndedIterator for TstCrosswordIterator<'a, 'b, T> {
                 }
 
                 GoLeft => {
-                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.right.as_ref())
-                    {
+                    if let (Some(&key_letter), Some(ref child)) = (key.peek(), node.left.as_ref()) {
                         if key_letter == self.joker || key_letter < node.label.first {
                             self.todo_j.push((child, GoRight, key));
                         }

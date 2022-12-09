@@ -1368,7 +1368,7 @@ fn tst_stats_on_insert_and_remove() {
     assert_eq!(s2.dist.is_empty(), false);
     assert_eq!(s2.key_len.min, 1);
     assert_eq!(s2.key_len.max, 3);
-    assert_eq!(s2.count.nodes, 20);
+    assert_eq!(s2.count.nodes, 16);
     assert_eq!(s2.count.values, 16);
     assert_eq!(s2.count.values, map.len());
 
@@ -1404,7 +1404,7 @@ fn tst_stats_on_insert_and_remove() {
     assert_eq!(
         s2.dist[2],
         DistStat {
-            matches: 4,
+            matches: 8,
             sides: 4,
             depth: 2
         }
@@ -1412,7 +1412,7 @@ fn tst_stats_on_insert_and_remove() {
     assert_eq!(
         s2.dist[3],
         DistStat {
-            matches: 9,
+            matches: 5,
             sides: 1,
             depth: 5
         }
@@ -1422,7 +1422,7 @@ fn tst_stats_on_insert_and_remove() {
         DistStat {
             matches: 0,
             sides: 1,
-            depth: 3
+            depth: 5
         }
     );
     assert_eq!(
@@ -1430,7 +1430,7 @@ fn tst_stats_on_insert_and_remove() {
         DistStat {
             matches: 0,
             sides: 0,
-            depth: 3
+            depth: 2
         }
     );
     assert_eq!(
@@ -1441,15 +1441,7 @@ fn tst_stats_on_insert_and_remove() {
             depth: 1
         }
     );
-    assert_eq!(
-        s2.dist[7],
-        DistStat {
-            matches: 0,
-            sides: 0,
-            depth: 1
-        }
-    );
-    assert_eq!(s2.dist.len(), 8);
+    assert_eq!(s2.dist.len(), 7);
 
     ////////////////////////////////////////////////////
 
@@ -1502,7 +1494,7 @@ fn tst_clear_some_map() {
 
     let s = map.stat();
 
-    assert_eq!(s.count.nodes, 20);
+    assert_eq!(s.count.nodes, 16);
     assert_eq!(s.count.values, 16);
     assert_eq!(s.count.values, map.len());
 
@@ -1706,15 +1698,15 @@ fn tst_create_with_macro() {
     assert_eq!(stat.dist.is_empty(), false);
     assert_eq!(stat.key_len.min, 1);
     assert_eq!(stat.key_len.max, 3);
-    assert_eq!(stat.count.nodes, 20);
+    assert_eq!(stat.count.nodes, 16);
     assert_eq!(stat.count.values, 16);
     assert_eq!(stat.count.values, map.len());
 
-    //node struct size should be around 56 bytes on x64
-    assert_eq!(stat.bytes.node, 56);
+    //node struct size should be around 64 bytes on x64
+    assert_eq!(stat.bytes.node, 64);
 
-    //total size should be around 1128 bytes on x64
-    assert_eq!(stat.bytes.total, 8 + 20 * 56);
+    //total size should be around 1096 bytes on x64
+    assert_eq!(stat.bytes.total, 8 + 16 * 64 + (20 - 16) * 16);
 
     use ternary_tree::DistStat;
 
@@ -1737,7 +1729,7 @@ fn tst_create_with_macro() {
     assert_eq!(
         stat.dist[2],
         DistStat {
-            matches: 4,
+            matches: 8,
             sides: 4,
             depth: 2
         }
@@ -1745,7 +1737,7 @@ fn tst_create_with_macro() {
     assert_eq!(
         stat.dist[3],
         DistStat {
-            matches: 9,
+            matches: 5,
             sides: 1,
             depth: 5
         }
@@ -1755,7 +1747,7 @@ fn tst_create_with_macro() {
         DistStat {
             matches: 0,
             sides: 1,
-            depth: 3
+            depth: 5
         }
     );
     assert_eq!(
@@ -1763,7 +1755,7 @@ fn tst_create_with_macro() {
         DistStat {
             matches: 0,
             sides: 0,
-            depth: 3
+            depth: 2
         }
     );
     assert_eq!(
@@ -1774,15 +1766,7 @@ fn tst_create_with_macro() {
             depth: 1
         }
     );
-    assert_eq!(
-        stat.dist[7],
-        DistStat {
-            matches: 0,
-            sides: 0,
-            depth: 1
-        }
-    );
-    assert_eq!(stat.dist.len(), 8);
+    assert_eq!(stat.dist.len(), 7);
 
     let mut v = Vec::new();
 
